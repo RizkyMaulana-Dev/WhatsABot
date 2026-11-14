@@ -96,3 +96,55 @@ To learn more about React Native, take a look at the following resources:
 - [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
 - [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
 # WhatsABot
+
+## Web Dashboard
+
+The `web/` folder contains a self-contained dark-mode web dashboard.
+
+## WhatsApp Bot Backend
+
+Run the backend server that bridges the dashboard to WhatsApp:
+
+```sh
+npm run server
+```
+
+This starts:
+- Express API server on port **2785**
+- `@open-wa/wa-automate` client to connect to WhatsApp
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/status` | GET | Get connection status |
+| `/api/qr` | GET | Get QR code for pairing |
+| `/api/pairing-code` | GET | Request pairing code (query param `phone`) |
+| `/api/disconnect` | POST | Disconnect WhatsApp |
+| `/api/reconnect` | POST | Reconnect WhatsApp |
+| `/api/bot/toggle` | POST | Toggle bot active/paused |
+| `/api/send` | POST | Send text message (`{to, text}`) |
+| `/api/messages` | GET | Get recent messages |
+
+### Bot Commands
+
+| Trigger | Category | Description |
+|---------|----------|-------------|
+| `.menu` | info | List all commands |
+| `.help` | info | Help with specific command |
+| `.stok` | shop | Check product stock |
+| `.ask` | ai | Ask AI a question |
+| `.sticker` | media | Convert image to sticker |
+
+## Requirements
+
+- Node.js >= 22
+- Chrome/Chromium (for Puppeteer)
+- Valid WhatsApp phone number for testing
+
+## Troubleshooting
+
+If the bot fails to connect, ensure:
+1. Chrome is installed and accessible
+2. Port 2785 is not in use
+3. No existing session conflicts (use `/api/disconnect` to clear)

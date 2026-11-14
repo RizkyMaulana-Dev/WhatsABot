@@ -44,6 +44,7 @@
 <div id="overlayRoot"></div>
 <div id="toastRoot"></div>
 
+<script src="api.js"></script>
 <script>
 const data = {
   lang: 'id',
@@ -303,7 +304,8 @@ const translations = {
     updated: 'Diperbarui', upToDate: 'Terbaru', uninstalled: 'Dilepas', installedDone: 'Terpasang',
     enabledOn: 'Aktif', enabledOff: 'Nonaktif', on: 'Ya', off: 'Tidak',
     noPlugins: 'Belum ada plugin terpasang',
-    changelog: 'Catatan Perubahan'
+    changelog: 'Catatan Perubahan',
+    pairingFailed: 'Gagal terhubung ke server bot'
   },
   en: {
     home: 'Home',
@@ -375,7 +377,8 @@ const translations = {
     updated: 'Updated', upToDate: 'Up to date', uninstalled: 'Uninstalled', installedDone: 'Installed',
     enabledOn: 'On', enabledOff: 'Off', on: 'On', off: 'Off',
     noPlugins: 'No plugins installed yet',
-    changelog: 'Changelog'
+    changelog: 'Changelog',
+    pairingFailed: 'Failed to connect to bot server'
   }
 };
 ;;
@@ -535,14 +538,24 @@ function renderHome(tr) {
         el('div', { class: 'meta' }, `${msg.sender} · ${msg.timestamp}`),
         el('div', { style: 'margin-top:3px;color:var(--text-dim)' }, msg.preview)
       ])
-    ])).slice(1)
+    ])).slice(1),
+    el('div', { style: 'margin-top:12px;padding-top:12px;border-top:1px solid var(--border)', class: 'meta' },
+      state.recentMessages.length === 0 ? 'No messages yet' : `${state.recentMessages.length} recent messages`
+    )
   ]);
   frag.appendChild(activityCard);
 
   return frag;
 }
 
-function setBotStatus(status) {
+async function setBotStatus(status) {
+  try {
+    if (status === 'active' || status === 'stopped') {
+      await api.toggleBot();
+    }
+  } catch (e) {
+    console.error('Bot toggle error:', e.message);
+  }
   state.botStatus = status;
   state.foregroundServiceRunning = status === 'active';
   renderApp();
@@ -597,21 +610,44 @@ function renderConnection(tr) {
   return frag;
 }
 
-function requestPairingCode() {
-  state.connectionStatus = 'loading';
-  state.pairingCode = null;
-  renderApp();
-  setTimeout(() => {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let code = '';
-    for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
-    code = code.slice(0, 4) + '-' + code.slice(4);
-    state.pairingCode = code;
-    state.connectionStatus = 'connected';
+async function requestPairingCode() {
+  try {
+    state.connectionStatus = 'loading';
+    state.pairingCode = null;
     renderApp();
-    toast(t().copied);
-  }, 800);
+    const res = await api.pairingCode('+6281234567890');
+    state.pairingCode = res.code;
+    state.connectionStatus = 'connected';
+    state.phoneNumber = '+62 812-3456-7890';
+    renderApp();
+  } catch (e) {
+    console.error('Pairing error:', e.message);
+    state.connectionStatus = 'disconnected';
+    renderApp();
+    toast(t().pairingFailed);
+  }
 }
+
+// --- Home API integration ---
+
+async function refreshBot() {
+  try {
+    const res = await api.status();
+    state.botStatus = res.botActive ? 'active' : 'stopped';
+    state.foregroundServiceRunning = res.botActive;
+    state.connectionStatus = res.connected ? 'connected' : 'disconnected';
+    state.phoneNumber = res.phoneNumber || '+62 812-3456-7890';
+    const messages = await api.messages();
+    state.recentMessages = messages.messages;
+    renderApp();
+  } catch (e) {
+    console.error('Refresh error:', e.message);
+    toast(t().pairingFailed);
+  }
+}
+
+// Refresh every 5 seconds
+setInterval(refreshBot, 5000);
 
 function copyCode() {
   navigator.clipboard.writeText(state.pairingCode);
@@ -625,7 +661,7 @@ function renderDisconnectModal(tr) {
       el('p', { style: 'color:var(--text-dim);margin:12px 0' }, 'Putuskan sesi WhatsApp saat ini? Anda perlu memindai ulang kode pairing untuk menghubungkan kembali.'),
       el('div', { style: 'display:flex;gap:10px;justify-content:flex-end;margin-top:16px' }, [
         el('button', { class: 'btn btn-secondary', onclick: closeModal }, tr.cancel || 'Batal'),
-        el('button', { class: 'btn btn-danger', onclick: () => { state.connectionStatus = 'disconnected'; state.pairingCode = null; closeModal(); renderApp(); } }, tr.disconnectSession)
+        el('button', { class: 'btn btn-danger', onclick: async () => { try { await api.disconnect(); } catch (e) { console.error('Disconnect error:', e.message); } state.connectionStatus = 'disconnected'; state.pairingCode = null; closeModal(); renderApp(); } }, tr.disconnectSession)
       ])
     ])
   ]);
@@ -1052,6 +1088,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       document.body.setAttribute('data-onboarding','skip');
       renderApp();
+      refreshBot();
     }
   } catch(e) {
     document.body.setAttribute('data-error', e.message.slice(0,100));
@@ -1138,6 +1175,7 @@ function pairingStep(tr) {
 function finishOnboarding() {
   state.onboardingComplete = true;
   renderApp();
+  refreshBot();
 }
 
 function renderOnboarding(tr) {
