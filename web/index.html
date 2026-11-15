@@ -602,7 +602,7 @@ function renderConnection(tr) {
       : el('button', {
           class: 'btn btn-primary',
           onclick: state.botActive ? refreshConnection : () => setBotStatus('active')
-        }, state.botActive ? tr.refresh : tr.startBot)
+        }, state.botActive ? (tr.refresh || 'Muat Ulang') : tr.startBot)
   ]);
   frag.appendChild(banner);
 
