@@ -568,7 +568,9 @@ async function setBotStatus(status) {
     console.error('Bot toggle error:', e.message);
   }
   state.botStatus = status;
+  state.botActive = status === 'active';
   state.foregroundServiceRunning = status === 'active';
+  if (state.botActive) api.reconnect().catch(() => {});
   renderApp();
 }
 
@@ -599,9 +601,8 @@ function renderConnection(tr) {
       ? el('button', { class: 'btn btn-danger', onclick: () => openModal(renderDisconnectModal(tr)) }, tr.disconnectSession)
       : el('button', {
           class: 'btn btn-primary',
-          onclick: refreshConnection,
-          disabled: !state.botActive
-        }, state.botActive ? tr.refresh : 'Aktifkan Bot')
+          onclick: state.botActive ? refreshConnection : () => setBotStatus('active')
+        }, state.botActive ? tr.refresh : tr.startBot)
   ]);
   frag.appendChild(banner);
 
