@@ -389,7 +389,14 @@ const translations = {
     whatsappWeb: 'WhatsABot Chats',
     selectChatPrompt: 'Pilih chat untuk mulai mengirim pesan.',
     typeMessage: 'Ketik pesan',
-    online: 'online'
+    online: 'online',
+    loadingChats: 'Memuat daftar chat...',
+    noChats: 'Belum ada chat',
+    failedLoadChats: 'Gagal memuat chat dari server',
+    loadingMessages: 'Memuat pesan...',
+    retry: 'Coba Lagi',
+    noResults: 'Tidak ada hasil',
+    group: 'grup'
   },
   en: {
     home: 'Home',
@@ -468,11 +475,18 @@ const translations = {
     whatsappWeb: 'WhatsABot Chats',
     selectChatPrompt: 'Select a chat to start messaging.',
     typeMessage: 'Type a message',
-    online: 'online'
+    online: 'online',
+    loadingChats: 'Loading chats...',
+    noChats: 'No chats yet',
+    failedLoadChats: 'Failed to load chats from server',
+    loadingMessages: 'Loading messages...',
+    retry: 'Try Again',
+    noResults: 'No results',
+    group: 'group'
   }
 };
 ;;
-const state = { ...data, botActive: false, qrDataUrl: null, showPairingForm: false, pairingPhone: '', activeChatId: null, chatSearch: '' };
+const state = { ...data, botActive: false, qrDataUrl: null, showPairingForm: false, pairingPhone: '', activeChatId: null, chatSearch: '', chats: [], chatsLoading: false, chatsError: null };
 const t = () => translations[state.lang];
 
 function qs(sel, root = document) { return root.querySelector(sel); }
@@ -536,13 +550,51 @@ function navigate(page) {
   renderApp();
   window.scrollTo(0, 0);
   if (page === 'home') refreshBot();
+  if (page === 'chats') fetchChats();
   if (page === 'connection') {
-    // Just fetch status; QR/pairing only shown after explicit button click
     api.status().then(res => {
       state.botActive = res.botActive;
       state.connectionStatus = res.connected ? 'connected' : 'disconnected';
+      state.phoneNumber = res.phoneNumber || state.phoneNumber;
       renderApp();
     }).catch(() => {});
+  }
+}
+
+// Fetch real chats from API
+async function fetchChats() {
+  state.chatsLoading = true;
+  state.chatsError = null;
+  renderApp();
+  try {
+    const res = await api.chats();
+    if (!res?.chats?.length) throw new Error('No chats');
+    // Convert remote format to local format for backward compat
+    state.chats = res.chats.map(c => ({
+      id: c.id,
+      name: c.name,
+      phone: c.isGroup ? null : (c.phone || ''),
+      isGroup: !!c.isGroup,
+      members: [],
+      unread: c.unreadCount || 0,
+      lastTime: c.lastMessage?.time || '',
+      messages: [{
+        id: 'last_' + Date.now(),
+        dir: c.lastMessage?.fromMe ? 'out' : 'in',
+        text: c.lastMessage?.body || '',
+        time: c.lastMessage?.time || '',
+        read: !c.unreadCount,
+        sender: c.lastMessage?.sender
+      }]
+    }));
+  } catch (e) {
+    console.error('[CHATS]', e.message);
+    state.chatsError = e.message;
+    // Fallback to demo data if no real chats
+    state.chats = [];
+  } finally {
+    state.chatsLoading = false;
+    renderApp();
   }
 }
 
@@ -607,24 +659,30 @@ function lastPreview(chat) {
 }
 function renderChats(tr) {
   const q = state.chatSearch.toLowerCase();
-  const list = state.chats.filter(c => !q || c.name.toLowerCase().includes(q) || lastPreview(c).toLowerCase().includes(q));
-  const active = state.chats.find(c => c.id === state.activeChatId) || null;
+  const list = (state.chats || []).filter(c => !q || c.name.toLowerCase().includes(q) || lastPreview(c).toLowerCase().includes(q));
+  const active = (state.chats || []).find(c => c.id === state.activeChatId) || null;
 
   const searchIcon = svg('M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z', 'M21 21l-4.35-4.35');
 
-  const listPanel = el('div', { class: 'wa-panel wa-list' }, [
-    el('div', { class: 'wa-list-head' }, [
-      el('div', { class: 'wa-search' }, [
-        searchIcon,
-        el('input', {
-          class: 'wa-search-input', placeholder: tr.searchChats || 'Cari chat',
-          value: state.chatSearch,
-          oninput: e => { state.chatSearch = e.target.value; renderApp(); qs('.wa-search-input')?.focus(); }
-        })
-      ])
-    ]),
-    el('div', { class: 'wa-chat-items' }, list.map(chat => {
-      const last = chat.messages[chat.messages.length - 1];
+  let itemsEl;
+  if (state.chatsLoading) {
+    itemsEl = el('div', { class: 'wa-state' }, [
+      el('div', { class: 'wa-spinner' }),
+      el('div', { class: 'wa-state-text' }, tr.loadingChats || 'Memuat daftar chat...')
+    ]);
+  } else if (state.chatsError) {
+    itemsEl = el('div', { class: 'wa-state' }, [
+      el('div', { class: 'wa-state-icon' }, '⚠️'),
+      el('div', { class: 'wa-state-text' }, tr.failedLoadChats || 'Gagal memuat chat'),
+      el('button', { class: 'btn btn-secondary btn-small', style: 'margin-top:10px', onclick: fetchChats }, tr.retry || 'Coba lagi')
+    ]);
+  } else if (!list.length) {
+    itemsEl = el('div', { class: 'wa-state' }, [
+      el('div', { class: 'wa-state-icon' }, '💬'),
+      el('div', { class: 'wa-state-text' }, q ? (tr.noResults || 'Tidak ada hasil') : (tr.noChats || 'Belum ada chat'))
+    ]);
+  } else {
+    itemsEl = el('div', { class: 'wa-chat-items' }, list.map(chat => {
       return el('div', { class: `wa-chat-item${state.activeChatId === chat.id ? ' active' : ''}`, onclick: () => openChat(chat.id) }, [
         chatAvatar(chat),
         el('div', { class: 'wa-chat-item-body' }, [
@@ -638,7 +696,22 @@ function renderChats(tr) {
           ])
         ])
       ]);
-    }))
+    }));
+  }
+
+  const listPanel = el('div', { class: 'wa-panel wa-list' }, [
+    el('div', { class: 'wa-list-head' }, [
+      el('div', { class: 'wa-search' }, [
+        searchIcon,
+        el('input', {
+          class: 'wa-search-input', placeholder: tr.searchChats || 'Cari chat',
+          value: state.chatSearch,
+          oninput: e => { state.chatSearch = e.target.value; renderApp(); qs('.wa-search-input')?.focus(); }
+        })
+      ]),
+      el('button', { class: 'wa-icon-btn', title: 'Muat ulang', onclick: fetchChats }, svg('M23 4v6h-6', 'M1 20v-6h6', 'M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15'))
+    ]),
+    itemsEl
   ]);
 
   let conv;
@@ -649,29 +722,37 @@ function renderChats(tr) {
       el('p', {}, tr.selectChatPrompt || 'Pilih chat untuk mulai mengirim pesan.')
     ]);
   } else {
-    const backBtn = el('button', { class: 'wa-icon-btn wa-back', onclick: () => { state.activeChatId = null; renderApp(); } }, '‹');
+    const backBtn = el('button', { class: 'wa-icon-btn wa-back', onclick: () => { state.activeChatId = null; state.chatMessages = null; renderApp(); } }, '‹');
     const header = el('div', { class: 'wa-conv-head' }, [
       backBtn,
       chatAvatar(active, 40),
       el('div', { class: 'wa-conv-head-info' }, [
         el('span', { class: 'wa-conv-name' }, active.name),
         el('span', { class: 'wa-conv-status' }, active.isGroup
-          ? (active.members || []).join(', ')
-          : (active.online ? (tr.online || 'online') : active.phone))
+          ? (active.members || []).join(', ') || tr.group || 'grup'
+          : (active.phone || (active.online ? (tr.online || 'online') : '')))
       ]),
       el('div', { class: 'wa-conv-actions' }, ['🔍', '⋮'].map(i => el('button', { class: 'wa-icon-btn' }, i)))
     ]);
 
-    const msgs = el('div', { class: 'wa-messages', id: 'waMessages' }, active.messages.map(m => {
-      return el('div', { class: `wa-bubble ${m.dir}` }, [
-        active.isGroup && m.dir === 'in' && m.sender ? el('div', { class: 'wa-bubble-sender' }, m.sender) : null,
-        el('div', { class: 'wa-bubble-text' }, m.text),
-        el('div', { class: 'wa-bubble-meta' }, [
-          el('span', {}, m.time),
-          m.dir === 'out' ? el('span', { class: `wa-tick${m.read ? ' read' : ''}` }, m.read ? '✓✓' : '✓') : null
-        ])
+    let msgs;
+    if (state.chatsLoading && !state.chatMessages) {
+      msgs = el('div', { class: 'wa-messages', id: 'waMessages' }, [
+        el('div', { class: 'wa-state' }, [el('div', { class: 'wa-spinner' }), el('div', { class: 'wa-state-text' }, tr.loadingMessages || 'Memuat pesan...')])
       ]);
-    }));
+    } else {
+      const listMsgs = state.chatMessages || active.messages || [];
+      msgs = el('div', { class: 'wa-messages', id: 'waMessages' }, listMsgs.map(m => {
+        return el('div', { class: `wa-bubble ${m.dir}` }, [
+          active.isGroup && m.dir === 'in' && m.sender ? el('div', { class: 'wa-bubble-sender' }, m.sender) : null,
+          el('div', { class: 'wa-bubble-text' }, m.text),
+          el('div', { class: 'wa-bubble-meta' }, [
+            el('span', {}, m.time),
+            m.dir === 'out' ? el('span', { class: `wa-tick${m.read ? ' read' : ''}` }, m.read ? '✓✓' : '✓') : null
+          ])
+        ]);
+      }));
+    }
 
     const inputRow = el('div', { class: 'wa-input-row' }, [
       el('button', { class: 'wa-icon-btn' }, '😊'),
@@ -698,8 +779,26 @@ function openChat(id) {
   const chat = state.chats.find(c => c.id === id);
   if (!chat) return;
   state.activeChatId = id;
+  state.chatMessages = null;
   chat.unread = 0;
   renderApp();
+  // Load real messages from the server
+  api.chatMessages(id).then(res => {
+    if (state.activeChatId !== id) return; // user switched
+    state.chatMessages = (res.messages || []).map(m => ({
+      id: m.id,
+      dir: m.fromMe ? 'out' : 'in',
+      text: m.body,
+      time: m.time,
+      read: true,
+      sender: m.sender
+    }));
+    renderApp();
+  }).catch(e => {
+    console.error('[MSGS]', e.message);
+    state.chatMessages = chat.messages; // fallback to last-message preview
+    renderApp();
+  });
 }
 
 function nowTime() {
@@ -711,15 +810,15 @@ function sendChatMessage() {
   const text = (input?.value || '').trim();
   if (!text || !state.activeChatId) return;
   const chat = state.chats.find(c => c.id === state.activeChatId);
-  chat.messages.push({ id: 'm' + Date.now(), dir: 'out', text, time: nowTime(), read: false });
+  const msg = { id: 'm' + Date.now(), dir: 'out', text, time: nowTime(), read: false };
+  if (state.chatMessages) state.chatMessages.push(msg);
+  else chat.messages.push(msg);
   chat.lastTime = nowTime();
   input.value = '';
   renderApp();
   qs('#waInput')?.focus();
-  // Best-effort: mirror to the live bot if connected (ignore failures)
-  if (state.connectionStatus === 'connected' && chat.phone) {
-    api.sendText(chat.phone, text).catch(() => {});
-  }
+  // Send to the real contact via the bot
+  api.sendText(chat.id, text).catch(e => console.error('[SEND]', e.message));
 }
 
 // --- Home ---
@@ -1003,7 +1102,7 @@ async function refreshBot() {
     state.botActive = res.botActive;
     state.foregroundServiceRunning = res.botActive;
     state.connectionStatus = res.connected ? 'connected' : 'disconnected';
-    state.phoneNumber = res.phoneNumber || '+62 812-3456-7890';
+    if (res.phoneNumber) state.phoneNumber = res.phoneNumber; // real number from WA
     const messages = await api.messages();
     state.recentMessages = messages.messages;
     renderApp();
@@ -1443,6 +1542,11 @@ style.appendChild(document.createTextNode(`
 @media(min-width:1024px){.main-chat{padding:0}}
 
 .wa-app{display:flex;height:calc(100vh - var(--topbar-h));background:#0b141a;overflow:hidden}
+.wa-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 20px;color:var(--text-dim);text-align:center;gap:12px;flex:1}
+.wa-state-icon{font-size:36px}
+.wa-state-text{font-size:14px}
+.wa-spinner{width:32px;height:32px;border-radius:50%;border:3px solid #2a3942;border-top-color:#25d366;animation:waSpin .8s linear infinite}
+@keyframes waSpin{to{transform:rotate(360deg)}}
 .wa-panel{background:#111b21;min-height:0}
 
 /* Chat list */

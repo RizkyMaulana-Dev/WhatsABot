@@ -19,4 +19,6 @@ const api = {
   toggleBot: () => apiRequest('/bot/toggle', { method: 'POST' }),
   sendText: (to, text) => apiRequest('/send', { method: 'POST', body: JSON.stringify({ to, text }) }),
   messages: () => apiRequest('/messages'),
+  chats: () => apiRequest('/chats'),
+  chatMessages: (id) => apiRequest(`/chat/${encodeURIComponent(id)}/messages`),
 };
