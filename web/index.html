@@ -382,7 +382,7 @@ const translations = {
   }
 };
 ;;
-const state = { ...data };
+const state = { ...data, botActive: false, qrDataUrl: null, showPairingForm: false, pairingPhone: '' };
 const t = () => translations[state.lang];
 
 function qs(sel, root = document) { return root.querySelector(sel); }
@@ -394,6 +394,8 @@ function el(tag, attrs = {}, children = []) {
     if (k.startsWith('on')) e.addEventListener(k.slice(2).toLowerCase(), v);
     else if (k === 'class') e.className = v;
     else if (k === 'style') { if (typeof v === 'string') e.style.cssText = v; else Object.assign(e.style, v); }
+    else if (v === false || v == null) { /* skip: disabled=false etc */ }
+    else if (v === true) e.setAttribute(k, '');
     else e.setAttribute(k, v);
   });
   const arr = Array.isArray(children) ? children : [children];
@@ -569,16 +571,30 @@ function renderConnection(tr) {
 
   frag.appendChild(el('div', { class: 'page-head' }, [
     el('h1', { class: 'page-title' }, tr.connectionStatus),
-    el('p', { class: 'page-sub' }, tr.pairingCode)
+    el('p', { class: 'page-sub' }, state.connectionStatus === 'connected' ? `${state.phoneNumber}` : tr.pairingCode)
   ]));
 
+  // Banner dengan status
   const banner = el('div', { class: 'card', style: 'display:flex;align-items:center;justify-content:space-between;gap:12px' }, [
     el('div', {}, [
-      el('div', { class: 'mono', style: 'font-size:20px;font-weight:700' }, state.connectionStatus === 'connected' ? state.phoneNumber : tr.disconnected),
-      el('div', { class: 'meta' }, state.connectionStatus === 'connected' ? tr.connected : (state.connectionStatus === 'loading' ? tr.loading || 'Memuat...' : tr.disconnected))
+      el('div', { class: 'mono', style: 'font-size:20px;font-weight:700' },
+        state.connectionStatus === 'connected' ? state.phoneNumber :
+        state.connectionStatus === 'loading' ? 'Memuat...' :
+        tr.disconnected
+      ),
+      el('div', { class: 'meta' },
+        state.connectionStatus === 'connected' ? tr.connected :
+        state.connectionStatus === 'loading' ? tr.loading || 'Memuat...' :
+        state.botActive ? tr.scanQR || 'Scan QR untuk koneksi' : tr.botStopped || 'Bot belum dimulai'
+      )
     ]),
-    state.connectionStatus === 'connected' ? el('button', { class: 'btn btn-danger', onclick: () => openModal(renderDisconnectModal(tr)) }, tr.disconnectSession) :
-    el('button', { class: 'btn btn-primary', onclick: refreshConnection }, tr.refresh || 'Muat Ulang')
+    state.connectionStatus === 'connected'
+      ? el('button', { class: 'btn btn-danger', onclick: () => openModal(renderDisconnectModal(tr)) }, tr.disconnectSession)
+      : el('button', {
+          class: 'btn btn-primary',
+          onclick: refreshConnection,
+          disabled: !state.botActive
+        }, state.botActive ? tr.refresh : 'Aktifkan Bot')
   ]);
   frag.appendChild(banner);
 
@@ -590,40 +606,153 @@ function renderConnection(tr) {
     return frag;
   }
 
-  // QR card - shown when server has a QR available
-  const qrCard = el('div', { class: 'card' }, [
-    el('div', { class: 'card-label' }, 'QR WhatsApp'),
-    el('div', { id: 'qrBox', style: 'display:flex;justify-content:center;padding:12px' },
-      state.qrDataUrl
-        ? el('img', { src: state.qrDataUrl, alt: 'QR', style: 'width:220px;height:220px;border-radius:12px;background:#fff;padding:8px' })
-        : el('div', { class: 'meta', style: 'padding:40px 0' }, state.connectionStatus === 'loading' ? 'Memuat QR...' : 'QR belum tersedia')
-    ),
-    el('div', { class: 'meta', style: 'margin-top:8px;text-align:center' }, 'WhatsApp → Settings → Linked Devices → Scan QR')
+  // Hanya tampilkan opsi jika bot aktif
+  if (!state.botActive) {
+    frag.appendChild(el('div', { class: 'card empty', style: 'text-align:center;padding:32px' }, [
+      el('div', { class: 'mono', style: 'font-size:16px;color:var(--warn)' }, tr.botStopMsg || 'Mulai bot terlebih dahulu di menu Beranda sebelum menghubungkan.')
+    ]));
+    return frag;
+  }
+
+  // Tombol aksi: tampilkan QR / minta kode pairing
+  const actionsCard = el('div', { class: 'card' }, [
+    el('div', { class: 'card-label' }, tr.connectionActions || 'Pilih Metode Koneksi'),
+    el('div', { style: 'display:flex;flex-direction:column;gap:12px;margin-top:12px' }, [
+      el('button', {
+        class: 'btn btn-secondary',
+        onclick: async () => {
+          try {
+            state.connectionStatus = 'loading';
+            renderApp();
+            const qr = await api.qr();
+            state.qrDataUrl = qr.qr || null;
+            renderApp();
+          } catch (e) {
+            toast(t().pairingFailed);
+            state.connectionStatus = 'disconnected';
+            renderApp();
+          }
+        }
+      }, '📷 Tampilkan QR Code'),
+      el('button', {
+        class: 'btn btn-secondary',
+        onclick: () => {
+          // Toggle ke form kode pairing
+          state.showPairingForm = !state.showPairingForm;
+          if (!state.showPairingForm) state.pairingCode = null;
+          renderApp();
+        }
+      }, '🔗 Gunakan Kode Pairing')
+    ])
   ]);
-  frag.appendChild(qrCard);
+  frag.appendChild(actionsCard);
+
+  // QR Card - hanya muncul setelah tombol ditekan
+  if (state.qrDataUrl) {
+    const qrCard = el('div', { class: 'card' }, [
+      el('div', { class: 'card-label' }, 'QR WhatsApp'),
+      el('div', { id: 'qrBox', style: 'display:flex;justify-content:center;padding:12px' },
+        el('img', { src: state.qrDataUrl, alt: 'QR', style: 'width:240px;height:240px;border-radius:12px;background:#fff;padding:12px' })
+      ),
+      el('div', { class: 'meta', style: 'margin-top:8px;text-align:center' }, tr.qrGuide || 'WhatsApp → Settings → Linked Devices → Scan QR ini'),
+      el('div', { style: 'margin-top:12px;display:flex;gap:8px;justify-content:center' }, [
+        el('button', { class: 'btn btn-small btn-secondary', onclick: () => { state.qrDataUrl = null; renderApp(); } }, 'Tutup QR')
+      ])
+    ]);
+    frag.appendChild(qrCard);
+  }
+
+  // Pairing Code Form - muncul saat user klik tombol pairing
+  if (state.showPairingForm) {
+    const codeCard = el('div', { class: 'card' }, [
+      el('div', { class: 'card-label' }, tr.pairingCode),
+      el('div', { style: 'display:flex;gap:8px;margin-top:12px' }, [
+        el('input', {
+          id: 'phoneInput',
+          class: 'search-input',
+          style: 'flex:1;min-width:200px',
+          placeholder: '+62 8xx xxx xxxx',
+          value: state.pairingPhone || ''
+        }),
+        el('button', {
+          class: 'btn btn-primary',
+          onclick: requestPairingCode,
+          disabled: state.connectionStatus === 'loading'
+        }, state.connectionStatus === 'loading' ? '⏳...' : 'Minta Kode')
+      ]),
+      state.pairingCode && el('div', { style: 'margin-top:12px' }, [
+        el('div', { class: 'mono', style: 'font-size:32px;font-weight:700;letter-spacing:4px;background:var(--surface-elevated);border:1px solid var(--border);border-radius:12px;padding:16px 24px;text-align:center;width:fit-content;margin:0 auto' }, state.pairingCode),
+        el('div', { style: 'text-align:center;margin-top:8px' }, [
+          el('button', { class: 'btn btn-small btn-primary', onclick: copyCode }, 'Salin Kode')
+        ]),
+        el('div', { class: 'meta', style: 'margin-top:8px;text-align:center' }, tr.pairingGuide || 'Masukkan kode ini di WhatsApp: Linked Devices → Link with Phone Number')
+      ])
+    ]);
+    frag.appendChild(codeCard);
+  }
 
   return frag;
 }
 
 async function refreshConnection() {
+  if (!state.botActive) {
+    toast(t().botNotStarted || 'Bot belum dimulai');
+    return;
+  }
   try {
     const res = await api.status();
     if (res.connected) {
       state.connectionStatus = 'connected';
+      state.phoneNumber = res.phoneNumber || state.phoneNumber;
       renderApp();
       return;
     }
     state.connectionStatus = 'loading';
+    state.qrDataUrl = null;
+    state.showPairingForm = false;
     renderApp();
     const qr = await api.qr();
     state.qrDataUrl = qr.qr || null;
     state.connectionStatus = 'disconnected';
     renderApp();
   } catch (e) {
+    console.error('Refresh error:', e.message);
     state.connectionStatus = 'disconnected';
+    state.qrDataUrl = null;
     renderApp();
     toast(t().pairingFailed);
   }
+}
+
+async function requestPairingCode() {
+  const phone = (qs('#phoneInput')?.value || '').trim();
+  if (!phone) { toast('Masukkan nomor telepon'); return; }
+  
+  try {
+    state.connectionStatus = 'loading';
+    state.pairingCode = null;
+    state.showPairingForm = true;
+    renderApp();
+    
+    const res = await api.pairingCode(phone);
+    state.pairingCode = res.code;
+    state.connectionStatus = 'disconnected';
+    state.pairingPhone = phone;
+    renderApp();
+    toast(t().copied || 'Kode berhasil dibuat!');
+  } catch (e) {
+    console.error('Pairing error:', e.message);
+    state.connectionStatus = 'disconnected';
+    state.pairingCode = null;
+    renderApp();
+    toast(t().pairingFailed);
+  }
+}
+
+function copyCode() {
+  if (!state.pairingCode) return;
+  navigator.clipboard.writeText(state.pairingCode);
+  toast(t().copied || 'Kode disalin!');
 }
 
 // --- Home API integration ---
