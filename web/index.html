@@ -442,6 +442,8 @@ function navigate(page) {
   state.currentPage = page;
   renderApp();
   window.scrollTo(0, 0);
+  if (page === 'home') refreshBot();
+  if (page === 'connection') refreshConnection();
 }
 
 const homeIcon = svg('M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', 'M9 22V12h6v10');
@@ -573,55 +575,51 @@ function renderConnection(tr) {
   const banner = el('div', { class: 'card', style: 'display:flex;align-items:center;justify-content:space-between;gap:12px' }, [
     el('div', {}, [
       el('div', { class: 'mono', style: 'font-size:20px;font-weight:700' }, state.connectionStatus === 'connected' ? state.phoneNumber : tr.disconnected),
-      el('div', { class: 'meta' }, state.connectionStatus === 'connected' ? tr.connected : tr.disconnected)
+      el('div', { class: 'meta' }, state.connectionStatus === 'connected' ? tr.connected : (state.connectionStatus === 'loading' ? tr.loading || 'Memuat...' : tr.disconnected))
     ]),
     state.connectionStatus === 'connected' ? el('button', { class: 'btn btn-danger', onclick: () => openModal(renderDisconnectModal(tr)) }, tr.disconnectSession) :
-    el('button', { class: 'btn btn-primary', onclick: requestPairingCode }, tr.requestNewCode)
+    el('button', { class: 'btn btn-primary', onclick: refreshConnection }, tr.refresh || 'Muat Ulang')
   ]);
   frag.appendChild(banner);
 
-  const codeCard = el('div', { class: 'card' }, [
-    el('div', { class: 'card-label' }, tr.pairingCode),
-    el('div', { style: 'display:flex;align-items:center;gap:12px;flex-wrap:wrap' }, [
-      el('div', { class: 'mono', style: 'font-size:32px;font-weight:700;letter-spacing:4px;background:var(--surface-elevated);border:1px solid var(--border);border-radius:12px;padding:16px 24px;flex:1;min-width:200px;text-align:center' },
-        state.pairingCode || '────'
-      ),
-      state.pairingCode ? el('button', { class: 'btn btn-primary', onclick: () => copyCode() }, tr.copy) : null
-    ]),
-    el('div', { class: 'meta', style: 'margin-top:12px' }, state.connectionStatus === 'loading' ? 'Menghasilkan kode...' : state.pairingCode ? 'Kode aktif selama 20 detik' : 'Tekan tombol di atas untuk memulai pairing')
-  ]);
-  frag.appendChild(codeCard);
+  if (state.connectionStatus === 'connected') {
+    frag.appendChild(el('div', { class: 'card' }, [
+      el('div', { class: 'card-label' }, tr.botStatus),
+      el('div', { class: 'meta', style: 'margin-top:8px' }, `${tr.connected} · ${state.phoneNumber}`)
+    ]));
+    return frag;
+  }
 
-  const guideCard = el('div', { class: 'card' }, [
-    el('div', { class: 'card-label' }, tr.pairingGuide),
-    el('div', { style: 'display:flex;flex-direction:column;gap:14px' }, [
-      ['WhatsApp → Settings', 'Linked Devices → Link with phone number', 'Enter the 8-character code above'].map((step, i) =>
-        el('div', { style: 'display:flex;align-items:flex-start;gap:12px' }, [
-          el('div', { class: 'dot', style: `width:24px;height:24px;border-radius:50%;background:${state.pairingCode ? (i < 3 ? 'var(--primary)' : 'var(--border)') : 'var(--border)'};display:flex;align-items:center;justify-content:center;flex:none` },
-            el('span', { style: 'font-weight:700;color:var(--background);font-size:12px' }, i + 1)
-          ),
-          el('span', { style: 'margin-top:3px' }, step)
-        ])
-      )
-    ])
+  // QR card - shown when server has a QR available
+  const qrCard = el('div', { class: 'card' }, [
+    el('div', { class: 'card-label' }, 'QR WhatsApp'),
+    el('div', { id: 'qrBox', style: 'display:flex;justify-content:center;padding:12px' },
+      state.qrDataUrl
+        ? el('img', { src: state.qrDataUrl, alt: 'QR', style: 'width:220px;height:220px;border-radius:12px;background:#fff;padding:8px' })
+        : el('div', { class: 'meta', style: 'padding:40px 0' }, state.connectionStatus === 'loading' ? 'Memuat QR...' : 'QR belum tersedia')
+    ),
+    el('div', { class: 'meta', style: 'margin-top:8px;text-align:center' }, 'WhatsApp → Settings → Linked Devices → Scan QR')
   ]);
-  frag.appendChild(guideCard);
+  frag.appendChild(qrCard);
 
   return frag;
 }
 
-async function requestPairingCode() {
+async function refreshConnection() {
   try {
+    const res = await api.status();
+    if (res.connected) {
+      state.connectionStatus = 'connected';
+      renderApp();
+      return;
+    }
     state.connectionStatus = 'loading';
-    state.pairingCode = null;
     renderApp();
-    const res = await api.pairingCode('+6281234567890');
-    state.pairingCode = res.code;
-    state.connectionStatus = 'connected';
-    state.phoneNumber = '+62 812-3456-7890';
+    const qr = await api.qr();
+    state.qrDataUrl = qr.qr || null;
+    state.connectionStatus = 'disconnected';
     renderApp();
   } catch (e) {
-    console.error('Pairing error:', e.message);
     state.connectionStatus = 'disconnected';
     renderApp();
     toast(t().pairingFailed);
@@ -649,11 +647,6 @@ async function refreshBot() {
 // Refresh every 5 seconds
 setInterval(refreshBot, 5000);
 
-function copyCode() {
-  navigator.clipboard.writeText(state.pairingCode);
-  toast(t().copied);
-}
-
 function renderDisconnectModal(tr) {
   return el('div', { class: 'modal' }, [
     el('div', { class: 'modal-content' }, [
@@ -661,7 +654,7 @@ function renderDisconnectModal(tr) {
       el('p', { style: 'color:var(--text-dim);margin:12px 0' }, 'Putuskan sesi WhatsApp saat ini? Anda perlu memindai ulang kode pairing untuk menghubungkan kembali.'),
       el('div', { style: 'display:flex;gap:10px;justify-content:flex-end;margin-top:16px' }, [
         el('button', { class: 'btn btn-secondary', onclick: closeModal }, tr.cancel || 'Batal'),
-        el('button', { class: 'btn btn-danger', onclick: async () => { try { await api.disconnect(); } catch (e) { console.error('Disconnect error:', e.message); } state.connectionStatus = 'disconnected'; state.pairingCode = null; closeModal(); renderApp(); } }, tr.disconnectSession)
+        el('button', { class: 'btn btn-danger', onclick: async () => { try { await api.disconnect(); } catch (e) { console.error('Disconnect error:', e.message); } state.connectionStatus = 'disconnected'; closeModal(); renderApp(); } }, tr.disconnectSession)
       ])
     ])
   ]);
